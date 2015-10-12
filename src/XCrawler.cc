@@ -2,7 +2,7 @@
 
 /**
  * The most important class.
- * This class start thread, maintain priority queue ,fetch web page,
+ * This class start thread, maintain priority queue, fetch web page,
  * add links to priority queue etc.
  * Note that currently we have not implemented all the futures provided here
  * 
@@ -13,31 +13,31 @@ set<string> visitedUrl;
 DNSManager dnsMana;
 ofstream fResultOut(RAW_DATA_FILE.c_str());
 
-XCrawler::XCrawler():
-    curConns(0) {
-
+XCrawler::XCrawler(): curConns(0) {
     init();
     init_epoll();
 }
 
 XCrawler::~XCrawler() {
-
 }
 
 void XCrawler::init() {
-    string strLine;
-
     ifstream init_file;
     init_file.open(SEEDS_FILE.c_str(), ios::binary);
+
     if (!init_file) {
         exit(0);
     }
+
+    string strLine;
+
     while (getline(init_file, strLine)) {
         unvisitedUrl.push(strLine);
     }
-    init_file.close();
 
+    init_file.close();
     init_file.open(VISITED_URL_MD5_FILE.c_str(), ios::binary);
+
     if (!init_file) {
         exit(0);
     }
@@ -45,14 +45,17 @@ void XCrawler::init() {
     while (getline(init_file, strLine)) {
         visitedUrl.insert(strLine);
     }
+
     init_file.close();
 }
 
 void XCrawler::init_epoll() {
-    int fd = epoll_create1(0);
+    //int fd = epoll_create1(0);
+    int fd = kqueue();
     check(fd > 0, "epoll_create");
 
-    events = (struct epoll_event *)malloc(sizeof(struct epoll_event) * MAXEVENTS);
+    //events = (struct epoll_event *)malloc(sizeof(struct epoll_event) * MAXEVENTS);
+    events = (struct kevent *)malloc(sizeof(struct kevent) * MAXEVENTS);
 
     epfd = fd;
 }
@@ -66,9 +69,8 @@ static void *run(void *arg)
 void XCrawler::start()
 {
     pthread_t tid;
-    int iRet = 0;
+    int iRet = pthread_create(&tid, NULL, run, this);
 
-    iRet = pthread_create(&tid, NULL, run, this);
     if (iRet < 0) {
         perror("pthread_create");
         exit(0);
@@ -79,26 +81,29 @@ void XCrawler::start()
 
 void XCrawler::fetch()
 {
-    int iRet = 0;
-    string url;
+    //string url;
     char reqBuf[MAXLINE];
 
-    int iFd;
+    int iFd = 0;
     string sUrl;
-    int i;
-    int size;
-
+    int size = 0;
+    int iRet = 0;
+    
     while (true) {
+        struct kevent evlist;
+        struct kevent event;
 
         do {
             if (curConns < MAXCONNS) {
                 iRet = fetch_url(sUrl);
+
                 if (iRet < 0) {
                     log_err("fetch_url");
                     break;
                 }
 
                 iRet = make_connection(&iFd);
+
                 if (iRet < 0) {
                     log_err("and_make_connection");
                     break;
@@ -106,6 +111,7 @@ void XCrawler::fetch()
                 
                 size = MAXLINE;
                 iRet = prepare_get_answer_request(reqBuf, &size, sUrl);
+
                 if (iRet < 0) {
                     log_err("prepare_get_answer_request");
                     break;
@@ -124,24 +130,27 @@ void XCrawler::fetch()
                 pState->iLen = sUrl.size();
                 pState->iLast = 0;
 
-                struct epoll_event event;
-                event.data.ptr = (void *)pState;
-                event.events = EPOLLIN | EPOLLET;
+                //struct epoll_event event;
+                //event.data.ptr = (void *)pState;
+                //event.events = EPOLLIN | EPOLLET;
 
-                iRet = epoll_ctl(epfd, EPOLL_CTL_ADD, iFd, &event);
-                check(iRet == 0, "epoll_add");
+                //iRet = epoll_ctl(epfd, EPOLL_CTL_ADD, iFd, &event);
+                //check(iRet == 0, "epoll_add");
+
+                event.udata = (void *)pState;
+                EV_SET(&event, iFd, EVFILT_READ, EV_ADD, 0, 0, NULL);
 
                 curConns++;
             }
         } while(0);
         
-        int n = epoll_wait(epfd, events, MAXEVENTS, EPOLLTIMEOUT);
-        check(n >= 0, "epoll_wait");
+        //int n = epoll_wait(epfd, events, MAXEVENTS, EPOLLTIMEOUT);
+        //check(n >= 0, "epoll_wait");
 
-        CrawlerState *pState;
+        kevent(epfd, &event, 1, &evlist, 1, NULL);
 
-        for (i=0; i<n; i++) {
-            pState = (CrawlerState *)events[i].data.ptr;
+        for (int i = 0; i < n; i++) {
+            CrawlerState *pState = (CrawlerState *)events[i].udata;
             int iHeaderSize = MAXLINE;
             vector<string> vFollows;
 
@@ -155,13 +164,14 @@ void XCrawler::fetch()
                     
                     // parse html
                     iRet = is_valid_html(pState->htmlBody, pState->iLast);
+
                     if (iRet != 0) {
                         break;
                     }
 
                     Parse::SearchAnswer(pState->htmlBody, pState->iLast, fResultOut);
-
                     iRet = Parse::GetFollowCount(pState->htmlBody, pState->iLast, &(pState->iFolloweeCount), &(pState->iFollowerCount));
+
                     if (iRet < 0) {
                         // ignore 429 err
                         close(pState->iFd);
@@ -169,12 +179,14 @@ void XCrawler::fetch()
                     }
 
                     iRet = Parse::GetHashId(pState->htmlBody, pState->iLast, pState->hashId, &(pState->iHashIdSize));
+
                     if (iRet < 0) {
                         close(pState->iFd);
                         break;
                     }
 
                     iRet = Parse::GetXsrf(pState->htmlBody, pState->iLast, pState->xsrf, &(pState->iXsrfSize));
+
                     if (iRet < 0) {
                         close(pState->iFd);
                         break;
@@ -197,52 +209,58 @@ void XCrawler::fetch()
 
                     // add followers link to queue
                     iRet = prepare_get_followers_request(reqBuf, &iHeaderSize, sUrl, pState->iFollowerCur * USERSPERREQ, pState);
+
                     if (iRet < 0) {
                         log_err("prepare_get_followers_request");
                         break;
                     }
                     
                     iRet = write(pState->iFd, reqBuf, iHeaderSize);
+
                     if (iRet < 0) {
                         log_err("write");
                         break;
                     }
 
                     pState->iFollowerCur++;
-
                     break;
 
                 case 1:
                     iRet = get_response(pState);
+
                     if (iRet < 0) {
                         log_err("get_response");
 
                         if (iRet == EEOF) {
                             iRet = make_connection(&(pState->iFd));
+
                             if (iRet < 0) {
                                 log_err("and_make_connection");
                                 break;
                             }
 
                             log_info("make connection suc!");
-                            struct epoll_event event;
-                            event.data.ptr = (void *)pState;
-                            event.events = EPOLLIN | EPOLLET;
 
-                            iRet = epoll_ctl(epfd, EPOLL_CTL_ADD, pState->iFd, &event);
-                            check(iRet == 0, "epoll_add");
+                            //struct epoll_event event;
+                            //event.data.ptr = (void *)pState;
+                            //event.events = EPOLLIN | EPOLLET;
+
+                            //iRet = epoll_ctl(epfd, EPOLL_CTL_ADD, pState->iFd, &event);
+                            //check(iRet == 0, "epoll_add");
+
+                            event.udata = (void *)pState;
+                            EV_SET(&event, iFd, EVFILT_READ, EV_ADD, 0, 0, NULL);
 
                             curConns++;
                         } else {
                             break;
                         }
                     } else {
-
                         iRet = is_valid_html(pState->htmlBody, pState->iLast);
+
                         if (iRet != 0) {
                             break;
                         }
-
                     }
 
                     Parse::SearchFollowers(pState->htmlBody, pState->iLast, vFollows);
@@ -255,12 +273,14 @@ void XCrawler::fetch()
 
                         iHeaderSize = HTMLSIZE;
                         iRet = prepare_get_followers_request(reqBuf, &iHeaderSize, sUrl, pState->iFollowerCur * USERSPERREQ, pState);
+
                         if (iRet < 0) {
                             log_err("prepare_get_followers_request");
                             break;
                         }
                         
                         iRet = write(pState->iFd, reqBuf, iHeaderSize);
+
                         if (iRet < 0) {
                             log_err("write");
                             continue;
@@ -279,12 +299,14 @@ void XCrawler::fetch()
                         sUrl = string(pState->base, pState->iLen);
 
                         iRet = prepare_get_followees_request(reqBuf, &iHeaderSize, sUrl, pState->iFolloweeCur, pState);
+
                         if (iRet < 0) {
                             log_err("prepare_get_followees_request");
                             break;
                         }
                         
                         iRet = write(pState->iFd, reqBuf, iHeaderSize);
+
                         if (iRet < 0) {
                             log_err("write");
                             break;
@@ -297,23 +319,29 @@ void XCrawler::fetch()
 
                 case 2:
                     iRet = get_response(pState);
+
                     if (iRet < 0) {
                         log_err("get_response");
 
                         if (iRet == EEOF) {
                             iRet = make_connection(&(pState->iFd));
+
                             if (iRet < 0) {
                                 log_err("and_make_connection");
                                 break;
                             }
 
                             log_info("make connection suc!");
-                            struct epoll_event event;
-                            event.data.ptr = (void *)pState;
-                            event.events = EPOLLIN | EPOLLET;
 
-                            iRet = epoll_ctl(epfd, EPOLL_CTL_ADD, pState->iFd, &event);
-                            check(iRet == 0, "epoll_add");
+                            //struct epoll_event event;
+                            //event.data.ptr = (void *)pState;
+                            //event.events = EPOLLIN | EPOLLET;
+
+                            //iRet = epoll_ctl(epfd, EPOLL_CTL_ADD, pState->iFd, &event);
+                            //check(iRet == 0, "epoll_add");
+
+                            event.udata = (void *)pState;
+                            EV_SET(&event, iFd, EVFILT_READ, EV_ADD, 0, 0, NULL);
 
                             curConns++;
                         } else {
@@ -322,6 +350,7 @@ void XCrawler::fetch()
                     } else {
 
                         iRet = is_valid_html(pState->htmlBody, pState->iLast);
+
                         if (iRet != 0) {
                             break;
                         }
@@ -337,12 +366,14 @@ void XCrawler::fetch()
 
                         iHeaderSize = HTMLSIZE;
                         iRet = prepare_get_followees_request(reqBuf, &iHeaderSize, sUrl, pState->iFolloweeCur * USERSPERREQ, pState);
+
                         if (iRet < 0) {
                             log_err("prepare_get_followees_request");
                             break;
                         }
                         
                         iRet = write(pState->iFd, reqBuf, iHeaderSize);
+
                         if (iRet < 0) {
                             log_err("write");
                             continue;
@@ -355,6 +386,7 @@ void XCrawler::fetch()
                         log_info("find followee succ!!");
 
                         iRet = fetch_url(sUrl);
+
                         if (iRet < 0) {
                             log_err("fetch_url");
                             close(pState->iFd);
@@ -363,12 +395,14 @@ void XCrawler::fetch()
 
                         size = MAXLINE;
                         iRet = prepare_get_answer_request(reqBuf, &size, sUrl);
+
                         if (iRet < 0) {
                             log_err("prepare_get_answer_request");
                             break;
                         }
 
                         iRet = write(iFd, reqBuf, size);
+
                         if (iRet < 0) {
                             log_err("write");
                             break;
@@ -385,16 +419,14 @@ void XCrawler::fetch()
                 default:
                     break;
             } 
-        }
-
-        //usleep(500000);
-
+        } //usleep(500000);
     } //end while
 }
 
 int XCrawler::is_valid_html(char *pHtml, int iSize) {
-    char *pCLpos;
+    char *pCLpos = NULL;
     pHtml[iSize] = '\0';
+
     if ((pCLpos = strstr(pHtml, "Content-Length: ")) == NULL) {
         return -1;
     }
@@ -402,8 +434,8 @@ int XCrawler::is_valid_html(char *pHtml, int iSize) {
     int iContentLen = atoi(pCLpos + strlen("Content-Length: "));
     printf("Content-Length: %d\n", iContentLen);
 
-
     char *pCRLF = strstr(pHtml, "\r\n\r\n");
+
     if (pCRLF == NULL) {
         return -1;
     }
@@ -413,10 +445,10 @@ int XCrawler::is_valid_html(char *pHtml, int iSize) {
     if (iSize < iTrueLen) {
         return -1;
     }
-
-    if (iSize > iTrueLen) {
+    else if (iSize > iTrueLen) {
         log_err("iSize = %d, iTrueLen = %d", iSize, iTrueLen);
     }
+
     return 0;
 }
 
@@ -424,15 +456,20 @@ int XCrawler::get_response(CrawlerState *pState) {
     int iFd = pState->iFd;
     int iLast = pState->iLast;
     int iRet = 0;
-    int nRead = 0;
     int first = 1;
+
     while (1) {
-        nRead = read(iFd, pState->htmlBody + iLast, HTMLSIZE - iLast);
+        int nRead = read(iFd, pState->htmlBody + iLast, HTMLSIZE - iLast);
 
         if (nRead == 0) {
             // EOF
-            if (first) log_info("first loop read EOF");
-            else  log_info("not first loop rend EOF");
+            if (first) {
+                log_info("first loop read EOF");
+            }
+            else {
+                log_info("not first loop rend EOF");
+            }
+
             log_err("EOF");
             close(iFd);
             curConns--;
@@ -464,11 +501,7 @@ err:
 }
 
 int XCrawler::fetch_url(string &sUrl) {
-    int iRet = 0;
-    int i;
-
     while (1) {
-    
         if(unvisitedUrl.empty()) {
             //sleep(1);
             printf("thread %ld: no data to process\n", (long)(pthread_self()) % THREAD_NUM);
@@ -477,8 +510,6 @@ int XCrawler::fetch_url(string &sUrl) {
 
         sUrl = unvisitedUrl.front();
         unvisitedUrl.pop();
-
-
         break;
     }
 
@@ -487,33 +518,32 @@ int XCrawler::fetch_url(string &sUrl) {
 }
 
 int XCrawler::make_connection(int *pFd) {
-    int iRet = 0;
-
     // make connection
     int iConnfd = socket(AF_INET, SOCK_STREAM, 0);
+
     if (iConnfd < 0) {
         log_err("socket");
         return -1;
     }
 
-    struct hostent *server;
-    struct sockaddr_in servAddr;
-
+    //struct hostent *server;
     //string ip = dnsMana.getIP(url.getHost());
     string ip = "60.28.215.98";
-    
+    struct sockaddr_in servAddr;
     memset(&servAddr, 0, sizeof(servAddr));
     servAddr.sin_family = AF_INET;
     servAddr.sin_port = htons(80);
     servAddr.sin_addr.s_addr = inet_addr(ip.c_str());
 
-    iRet = connect(iConnfd, (struct sockaddr *)&servAddr, sizeof(servAddr));
+    int iRet = connect(iConnfd, (struct sockaddr *)&servAddr, sizeof(servAddr));
+
     if (iRet < 0) {
         log_err("connect");
         return iRet;
     }
 
     iRet = make_socket_non_blocking(iConnfd);
+
     if (iRet < 0) {
         log_err("make_socket_non_blocking");
         return -1;
@@ -526,8 +556,8 @@ int XCrawler::make_connection(int *pFd) {
 
 int XCrawler::prepare_get_answer_request(char *pReq, int *pSize, string &sUrl) {
     Url url(sUrl);
-    int iRet = 0;
-    iRet = snprintf(pReq, *pSize,
+
+    int iRet = snprintf(pReq, *pSize,
             "GET %s/answers?order_by=vote_num HTTP/1.1\r\n"
             "Host: www.zhihu.com\r\n"
             "Connection: keep-alive\r\n"
@@ -544,21 +574,22 @@ int XCrawler::prepare_get_answer_request(char *pReq, int *pSize, string &sUrl) {
     }
 
     *pSize = iRet;
+
     return 0;
 }
 
 int XCrawler::prepare_get_followers_request(char *pReq, int *pSize, string &sUrl, int iCur, CrawlerState *pState) {
-    ostringstream oss; 
-    Url url(sUrl);
-    int iRet = 0;
+    //Url url(sUrl);
     string hashId(pState->hashId, pState->iHashIdSize);
     string _xsrf(pState->xsrf, pState->iXsrfSize);
 
+    ostringstream oss; 
     oss << "{\"offset\":" << iCur << ",\"order_by\":\"created\",\"hash_id\":\"" << hashId << "\"}";
+
     string sParams = oss.str();
     char postBody[MAXLINE];
 
-    iRet = snprintf(postBody, MAXLINE, 
+    int iRet = snprintf(postBody, MAXLINE, 
             "method=next&params=%s&_xsrf=%s",
             Url::encode(sParams).c_str(), _xsrf.c_str()
             );
@@ -588,29 +619,29 @@ int XCrawler::prepare_get_followers_request(char *pReq, int *pSize, string &sUrl
             "%s",
             iContentLen, sUrl.c_str(), cookie.c_str(), postBody
             );
+
     if (iRet < 0) {
         log_err("snprintf");
         return iRet;
     }
 
     //printf("post followers:\n%.*s", iRet, pReq);
-
     *pSize = iRet;
+
     return 0;
 }
 
 int XCrawler::prepare_get_followees_request(char *pReq, int *pSize, string &sUrl, int iCur, CrawlerState *pState) {
-    ostringstream oss; 
-    Url url(sUrl);
-    int iRet = 0;
     string hashId(pState->hashId, pState->iHashIdSize);
     string _xsrf(pState->xsrf, pState->iXsrfSize);
 
+    ostringstream oss; 
     oss << "{\"offset\":" << iCur << ",\"order_by\":\"created\",\"hash_id\":\"" << hashId << "\"}";
+
     string sParams = oss.str();
     char postBody[MAXLINE];
 
-    iRet = snprintf(postBody, MAXLINE, 
+    int iRet = snprintf(postBody, MAXLINE, 
             "method=next&params=%s&_xsrf=%s",
             Url::encode(sParams).c_str(), _xsrf.c_str()
             );
@@ -640,27 +671,29 @@ int XCrawler::prepare_get_followees_request(char *pReq, int *pSize, string &sUrl
             "%s",
             iContentLen, sUrl.c_str(), cookie.c_str(), postBody
             );
+
     if (iRet < 0) {
         log_err("snprintf");
         return iRet;
     }
 
     //printf("post followees:\n%.*s", iRet, pReq);
-
     *pSize = iRet;
+
     return 0;
 }
 
 int XCrawler::make_socket_non_blocking(int fd) {
-    int flags, s;
-    flags = fcntl(fd, F_GETFL, 0);
+    int flags = fcntl(fd, F_GETFL, 0);
+
     if (flags == -1) {
         log_err("fcntl");
         return -1;
     }
 
     flags |= O_NONBLOCK;
-    s = fcntl(fd, F_SETFL, flags);
+    int s = fcntl(fd, F_SETFL, flags);
+
     if (s == -1) {
         log_err("fcntl");
         return -1;
@@ -670,9 +703,7 @@ int XCrawler::make_socket_non_blocking(int fd) {
 }
 
 void XCrawler::push_urls(vector<string> &vFollows) {
-    vector<string>::iterator it;
-    for (it = vFollows.begin(); it != vFollows.end(); it++) {
-
+    for (vector<string>::iterator it = vFollows.begin(); it != vFollows.end(); it++) {
         if (visitedUrl.find(*it) != visitedUrl.end()) {
             continue;
         }

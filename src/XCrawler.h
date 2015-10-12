@@ -1,31 +1,34 @@
 #ifndef _CRAWLER_H_
 #define _CRAWLER_H_
 
-#include <iostream>
-#include <fstream>
-#include <sstream>
-#include <set>
-#include <vector>
-#include <queue>
-#include <string>
-#include <iterator>
-#include <signal.h>
+#include <assert.h>
 #include <cstdlib>
+#include <fcntl.h>
+#include <fstream>
+#include <iostream>
+#include <iterator>
+#include <netdb.h>      /* struct hostent, gethostbyname */
+#include <netinet/in.h> /* struct sockaddr_in, struct sockaddr */
+#include <queue>
+#include <set>
+#include <signal.h>
+#include <sstream>
+#include <string>
+#include <sys/socket.h> /* socket, connect */
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+#include <vector>
+//#include <sys/epoll.h>
+// header for kqueue
+#include <sys/event.h>
 #include <sys/time.h>
-#include <sys/epoll.h>
-#include <sys/socket.h> /* socket, connect */
-#include <netinet/in.h> /* struct sockaddr_in, struct sockaddr */
-#include <netdb.h>      /* struct hostent, gethostbyname */
-#include <unistd.h>
-#include <fcntl.h>
-#include <assert.h>
+#include <sys/types.h>
 
-#include "Url.h"
-#include "Parse.h"
-#include "config.h"
 #include "DNSManager.h"
+#include "Parse.h"
+#include "Url.h"
+#include "config.h"
 #include "dbg.h"
 
 #define MAXEVENTS   1024
@@ -55,7 +58,8 @@ public:
 
 private:
     int epfd;
-    struct epoll_event *events;
+    //struct epoll_event *events;
+    struct kevent *events;
     int curConns;
 
     struct CrawlerState {
@@ -94,7 +98,6 @@ private:
     int make_socket_non_blocking(int fd);
     void push_urls(vector<string> &vFollows);
     int is_valid_html(char *pHtml, int iSize);
-
 };
 
 #endif
