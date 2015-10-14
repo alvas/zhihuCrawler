@@ -170,7 +170,11 @@ void XCrawler::fetch()
 #endif
 
         for (int i = 0; i < n; i++) {
+#ifdef __linux__
+            CrawlerState *pState = (CrawlerState *)events[i].data.ptr;
+#elif __APPLE
             CrawlerState *pState = (CrawlerState *)events[i].udata;
+#endif
             int iHeaderSize = MAXLINE;
             vector<string> vFollows;
 
@@ -463,7 +467,7 @@ int XCrawler::is_valid_html(char *pHtml, int iSize) {
     }
 
     int iContentLen = atoi(pCLpos + strlen("Content-Length: "));
-    printf("Content-Length: %d\n", iContentLen);
+    cout << "Content-Length: " << iContentLen << endl;
 
     char *pCRLF = strstr(pHtml, "\r\n\r\n");
 
@@ -529,7 +533,7 @@ int XCrawler::fetch_url(string &sUrl) {
     while (1) {
         if(unvisitedUrl.empty()) {
             //sleep(1);
-            printf("thread %ld: no data to process\n", (long)(pthread_self()) % THREAD_NUM);
+            cout << "thread " << (long)(pthread_self()) % THREAD_NUM << ": no data to process" << endl;
             return -1;
         }
 
