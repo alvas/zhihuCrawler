@@ -2,7 +2,7 @@
 
 ## 介绍
 
-ZhihuCrawler是用C++编写的高效、基于事件驱动的知乎爬虫，目的是抓取最高赞回答、最高关注问题等数据。运行环境为支持epoll的平台。
+ZhihuCrawler是用C++编写的高效、基于事件驱动的知乎爬虫，目的是抓取最高赞回答、最高关注问题等数据。运行环境为支持kevent的平台。
 
 ## 使用
 
@@ -35,5 +35,3 @@ ZhihuCrawler是用C++编写的高效、基于事件驱动的知乎爬虫，目�
 ## 更多
 
 更多详情请访问 http://lifeofzjs.com/blog/2015/09/09/how-to-write-a-event-based-crawler-using-c/
-
-// 用C/C++写爬虫真是做大死
