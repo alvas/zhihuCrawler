@@ -1,4 +1,5 @@
 #include "XCrawler.h"
+#include <vector>
 
 /**
  * The most important class.
@@ -19,6 +20,8 @@ XCrawler::XCrawler(): curConns(0) {
 }
 
 XCrawler::~XCrawler() {
+    close(epfd);
+    free(events);
 }
 
 void XCrawler::init() {
@@ -26,6 +29,7 @@ void XCrawler::init() {
     init_file.open(SEEDS_FILE.c_str(), ios::binary);
 
     if (!init_file) {
+        log_err("open seed file");
         exit(0);
     }
 
@@ -36,6 +40,7 @@ void XCrawler::init() {
     }
 
     init_file.close();
+
     init_file.open(VISITED_URL_MD5_FILE.c_str(), ios::binary);
 
     if (!init_file) {
@@ -51,13 +56,12 @@ void XCrawler::init() {
 
 void XCrawler::init_epoll() {
     //int fd = epoll_create1(0);
-    int fd = kqueue();
-    check(fd > 0, "epoll_create");
+    //check(fd > 0, "epoll_create");
+    epfd = kqueue();
+    check(epfd > 0, "kqueue_create");
 
     //events = (struct epoll_event *)malloc(sizeof(struct epoll_event) * MAXEVENTS);
     events = (struct kevent *)malloc(sizeof(struct kevent) * MAXEVENTS);
-
-    epfd = fd;
 }
 
 static void *run(void *arg)
@@ -81,18 +85,12 @@ void XCrawler::start()
 
 void XCrawler::fetch()
 {
-    //string url;
-    char reqBuf[MAXLINE];
-
-    int iFd = 0;
     string sUrl;
-    int size = 0;
-    int iRet = 0;
+    int iFd = 0, size = 0, iRet = 0, n = 0, m = 0;
+    char reqBuf[MAXLINE];
+    vector<struct kevent> chlist;
     
     while (true) {
-        struct kevent evlist;
-        struct kevent event;
-
         do {
             if (curConns < MAXCONNS) {
                 iRet = fetch_url(sUrl);
@@ -118,6 +116,7 @@ void XCrawler::fetch()
                 }
 
                 iRet = write(iFd, reqBuf, size);
+
                 if (iRet < 0) {
                     log_err("write");
                     break;
@@ -137,17 +136,30 @@ void XCrawler::fetch()
                 //iRet = epoll_ctl(epfd, EPOLL_CTL_ADD, iFd, &event);
                 //check(iRet == 0, "epoll_add");
 
+                struct kevent event;
                 event.udata = (void *)pState;
-                EV_SET(&event, iFd, EVFILT_READ, EV_ADD, 0, 0, NULL);
+                chlist.push_back(event);
+                EV_SET(&(chlist[m]), iFd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
+                chlist[m].udata = (void *)pState;
+                m++;
 
                 curConns++;
             }
         } while(0);
         
-        //int n = epoll_wait(epfd, events, MAXEVENTS, EPOLLTIMEOUT);
+        //n = epoll_wait(epfd, events, MAXEVENTS, EPOLLTIMEOUT);
         //check(n >= 0, "epoll_wait");
 
-        kevent(epfd, &event, 1, &evlist, 1, NULL);
+        n = kevent(epfd, &chlist[0], chlist.size(), events, MAXEVENTS, NULL);
+
+        m = 0;
+        chlist.clear();
+
+        if (n > MAXEVENTS)
+        {
+            log_err("Exceed maximum events");
+            break;
+        }
 
         for (int i = 0; i < n; i++) {
             CrawlerState *pState = (CrawlerState *)events[i].udata;
@@ -157,6 +169,7 @@ void XCrawler::fetch()
             switch (pState->iState) {
                 case 0:
                     iRet = get_response(pState);
+
                     if (iRet < 0) {
                         log_err("get_response");
                         break;
@@ -248,8 +261,11 @@ void XCrawler::fetch()
                             //iRet = epoll_ctl(epfd, EPOLL_CTL_ADD, pState->iFd, &event);
                             //check(iRet == 0, "epoll_add");
 
-                            event.udata = (void *)pState;
-                            EV_SET(&event, iFd, EVFILT_READ, EV_ADD, 0, 0, NULL);
+                            struct kevent event;
+                            chlist.push_back(event);
+                            EV_SET(&(chlist[m]), iFd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
+                            chlist[m].udata = (void *)pState;
+                            m++;
 
                             curConns++;
                         } else {
@@ -340,8 +356,11 @@ void XCrawler::fetch()
                             //iRet = epoll_ctl(epfd, EPOLL_CTL_ADD, pState->iFd, &event);
                             //check(iRet == 0, "epoll_add");
 
-                            event.udata = (void *)pState;
-                            EV_SET(&event, iFd, EVFILT_READ, EV_ADD, 0, 0, NULL);
+                            struct kevent event;
+                            chlist.push_back(event);
+                            EV_SET(&(chlist[m]), iFd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
+                            chlist[m].udata = (void *)pState;
+                            m++;
 
                             curConns++;
                         } else {
@@ -453,10 +472,7 @@ int XCrawler::is_valid_html(char *pHtml, int iSize) {
 }
 
 int XCrawler::get_response(CrawlerState *pState) {
-    int iFd = pState->iFd;
-    int iLast = pState->iLast;
-    int iRet = 0;
-    int first = 1;
+    int iFd = pState->iFd, iLast = pState->iLast, iRet = 0, first = 1;
 
     while (1) {
         int nRead = read(iFd, pState->htmlBody + iLast, HTMLSIZE - iLast);
@@ -479,7 +495,10 @@ int XCrawler::get_response(CrawlerState *pState) {
         if (nRead < 0) {
             if (errno != EAGAIN) {
                 log_err("read err, and errno = %d", errno);
-                goto err;
+                close(iFd);
+                //free(pState);
+                curConns--;
+                return -1;
             }
 
             break;
@@ -492,12 +511,6 @@ int XCrawler::get_response(CrawlerState *pState) {
     pState->iLast = iLast;
 
     return iRet;
-
-err:
-    close(iFd);
-    //free(pState);
-    curConns--;
-    return -1;
 }
 
 int XCrawler::fetch_url(string &sUrl) {
@@ -558,15 +571,15 @@ int XCrawler::prepare_get_answer_request(char *pReq, int *pSize, string &sUrl) {
     Url url(sUrl);
 
     int iRet = snprintf(pReq, *pSize,
-            "GET %s/answers?order_by=vote_num HTTP/1.1\r\n"
-            "Host: www.zhihu.com\r\n"
-            "Connection: keep-alive\r\n"
-            "Cache-Control: max-age=0\r\n"
-            "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8\r\n"
-            "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.157 Safari/537.36\r\n"
-            "Accept-Language: zh-CN,zh;q=0.8\r\n"
-            "Cookie: %s\r\n"
-            "\r\n", url.getPath().c_str(), cookie.c_str());
+                        "GET %s/answers?order_by=vote_num HTTP/1.1\r\n"
+                        "Host: www.zhihu.com\r\n"
+                        "Connection: keep-alive\r\n"
+                        "Cache-Control: max-age=0\r\n"
+                        "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8\r\n"
+                        "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.157 Safari/537.36\r\n"
+                        "Accept-Language: zh-CN,zh;q=0.8\r\n"
+                        "Cookie: %s\r\n"
+                        "\r\n", url.getPath().c_str(), cookie.c_str());
 
     if (iRet < 0) {
         log_err("snprintf");
@@ -590,9 +603,8 @@ int XCrawler::prepare_get_followers_request(char *pReq, int *pSize, string &sUrl
     char postBody[MAXLINE];
 
     int iRet = snprintf(postBody, MAXLINE, 
-            "method=next&params=%s&_xsrf=%s",
-            Url::encode(sParams).c_str(), _xsrf.c_str()
-            );
+                        "method=next&params=%s&_xsrf=%s",
+                        Url::encode(sParams).c_str(), _xsrf.c_str());
 
     if (iRet < 0) {
         log_err("snprintf postBody");
@@ -603,22 +615,21 @@ int XCrawler::prepare_get_followers_request(char *pReq, int *pSize, string &sUrl
     postBody[iContentLen] = '\0';
 
     iRet = snprintf(pReq, *pSize,
-            "POST /node/ProfileFollowersListV2 HTTP/1.1\r\n"
-            "Host: www.zhihu.com\r\n"
-            "Connection: keep-alive\r\n"
-            "Content-Length: %d\r\n"
-            "Accept: */*\r\n"
-            "Origin: http://www.zhihu.com\r\n"
-            "X-Requested-With: XMLHttpRequest\r\n"
-            "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.157 Safari/537.36\r\n"
-            "Content-Type: application/x-www-form-urlencoded; charset=UTF-8\r\n"
-            "Referer: %s/followers\r\n"
-            "Accept-Language: zh-CN,zh;q=0.8\r\n"
-            "Cookie: %s\r\n"
-            "\r\n"
-            "%s",
-            iContentLen, sUrl.c_str(), cookie.c_str(), postBody
-            );
+                    "POST /node/ProfileFollowersListV2 HTTP/1.1\r\n"
+                    "Host: www.zhihu.com\r\n"
+                    "Connection: keep-alive\r\n"
+                    "Content-Length: %d\r\n"
+                    "Accept: */*\r\n"
+                    "Origin: http://www.zhihu.com\r\n"
+                    "X-Requested-With: XMLHttpRequest\r\n"
+                    "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.157 Safari/537.36\r\n"
+                    "Content-Type: application/x-www-form-urlencoded; charset=UTF-8\r\n"
+                    "Referer: %s/followers\r\n"
+                    "Accept-Language: zh-CN,zh;q=0.8\r\n"
+                    "Cookie: %s\r\n"
+                    "\r\n"
+                    "%s",
+                    iContentLen, sUrl.c_str(), cookie.c_str(), postBody);
 
     if (iRet < 0) {
         log_err("snprintf");
@@ -642,9 +653,8 @@ int XCrawler::prepare_get_followees_request(char *pReq, int *pSize, string &sUrl
     char postBody[MAXLINE];
 
     int iRet = snprintf(postBody, MAXLINE, 
-            "method=next&params=%s&_xsrf=%s",
-            Url::encode(sParams).c_str(), _xsrf.c_str()
-            );
+                        "method=next&params=%s&_xsrf=%s",
+                        Url::encode(sParams).c_str(), _xsrf.c_str());
 
     if (iRet < 0) {
         log_err("snprintf postBody");
@@ -655,22 +665,21 @@ int XCrawler::prepare_get_followees_request(char *pReq, int *pSize, string &sUrl
     postBody[iContentLen] = '\0';
 
     iRet = snprintf(pReq, *pSize,
-            "POST /node/ProfileFolloweesListV2 HTTP/1.1\r\n"
-            "Host: www.zhihu.com\r\n"
-            "Connection: keep-alive\r\n"
-            "Content-Length: %d\r\n"
-            "Accept: */*\r\n"
-            "Origin: http://www.zhihu.com\r\n"
-            "X-Requested-With: XMLHttpRequest\r\n"
-            "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.157 Safari/537.36\r\n"
-            "Content-Type: application/x-www-form-urlencoded; charset=UTF-8\r\n"
-            "Referer: %s/followers\r\n"
-            "Accept-Language: zh-CN,zh;q=0.8\r\n"
-            "Cookie: %s\r\n"
-            "\r\n"
-            "%s",
-            iContentLen, sUrl.c_str(), cookie.c_str(), postBody
-            );
+                    "POST /node/ProfileFolloweesListV2 HTTP/1.1\r\n"
+                    "Host: www.zhihu.com\r\n"
+                    "Connection: keep-alive\r\n"
+                    "Content-Length: %d\r\n"
+                    "Accept: */*\r\n"
+                    "Origin: http://www.zhihu.com\r\n"
+                    "X-Requested-With: XMLHttpRequest\r\n"
+                    "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.157 Safari/537.36\r\n"
+                    "Content-Type: application/x-www-form-urlencoded; charset=UTF-8\r\n"
+                    "Referer: %s/followers\r\n"
+                    "Accept-Language: zh-CN,zh;q=0.8\r\n"
+                    "Cookie: %s\r\n"
+                    "\r\n"
+                    "%s",
+                    iContentLen, sUrl.c_str(), cookie.c_str(), postBody);
 
     if (iRet < 0) {
         log_err("snprintf");
@@ -684,6 +693,7 @@ int XCrawler::prepare_get_followees_request(char *pReq, int *pSize, string &sUrl
 }
 
 int XCrawler::make_socket_non_blocking(int fd) {
+    // get the file access mode and the file status flags
     int flags = fcntl(fd, F_GETFL, 0);
 
     if (flags == -1) {
@@ -692,6 +702,8 @@ int XCrawler::make_socket_non_blocking(int fd) {
     }
 
     flags |= O_NONBLOCK;
+
+    // set the file status flags to O_NONBLOCK
     int s = fcntl(fd, F_SETFL, flags);
 
     if (s == -1) {
@@ -703,12 +715,12 @@ int XCrawler::make_socket_non_blocking(int fd) {
 }
 
 void XCrawler::push_urls(vector<string> &vFollows) {
-    for (vector<string>::iterator it = vFollows.begin(); it != vFollows.end(); it++) {
-        if (visitedUrl.find(*it) != visitedUrl.end()) {
+    for (auto &s : vFollows) {
+        if (visitedUrl.find(s) != visitedUrl.end()) {
             continue;
         }
 
-        visitedUrl.insert(*it);
-        unvisitedUrl.push(*it);
+        visitedUrl.insert(s);
+        unvisitedUrl.push(s);
     }
 }

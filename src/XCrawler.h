@@ -1,6 +1,11 @@
 #ifndef _CRAWLER_H_
 #define _CRAWLER_H_
 
+#include "DNSManager.h"
+#include "Parse.h"
+#include "Url.h"
+#include "config.h"
+#include "dbg.h"
 #include <assert.h>
 #include <cstdlib>
 #include <fcntl.h>
@@ -14,22 +19,15 @@
 #include <signal.h>
 #include <sstream>
 #include <string>
+//#include <sys/epoll.h>
+#include <sys/event.h> /* for kqueue */
 #include <sys/socket.h> /* socket, connect */
 #include <sys/time.h>
+#include <sys/time.h> /* for kqueue */
+#include <sys/types.h> /* for kqueue */
 #include <time.h>
 #include <unistd.h>
 #include <vector>
-//#include <sys/epoll.h>
-// header for kqueue
-#include <sys/event.h>
-#include <sys/time.h>
-#include <sys/types.h>
-
-#include "DNSManager.h"
-#include "Parse.h"
-#include "Url.h"
-#include "config.h"
-#include "dbg.h"
 
 #define MAXEVENTS   1024
 #define MAXCONNS    500

@@ -12,11 +12,15 @@ int pageNum = 0;
 
 int main(int argc, char *argv[])
 {
-    WebServer server;
-    server.run();
+    //WebServer server;
+    //server.run();
+
+    //cout << "server runs!" << endl;
 
 	XCrawler crawler;
 	crawler.start();
+    
+    cout << "crawler starts!" << endl;
 
 	return 0;
 }
