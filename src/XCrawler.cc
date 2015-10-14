@@ -1,5 +1,4 @@
 #include "XCrawler.h"
-#include <vector>
 
 /**
  * The most important class.
@@ -55,13 +54,16 @@ void XCrawler::init() {
 }
 
 void XCrawler::init_epoll() {
-    //int fd = epoll_create1(0);
-    //check(fd > 0, "epoll_create");
+#ifdef __linux__
+    int fd = epoll_create1(0);
+    check(fd > 0, "epoll_create");
+    events = (struct epoll_event *)malloc(sizeof(struct epoll_event) * MAXEVENTS);
+    epfd = fd;
+#elif __APPLE__
     epfd = kqueue();
     check(epfd > 0, "kqueue_create");
-
-    //events = (struct epoll_event *)malloc(sizeof(struct epoll_event) * MAXEVENTS);
     events = (struct kevent *)malloc(sizeof(struct kevent) * MAXEVENTS);
+#endif
 }
 
 static void *run(void *arg)
@@ -88,7 +90,10 @@ void XCrawler::fetch()
     string sUrl;
     int iFd = 0, size = 0, iRet = 0, n = 0, m = 0;
     char reqBuf[MAXLINE];
+
+#ifdef __APPLE__
     vector<struct kevent> chlist;
+#endif
     
     while (true) {
         do {
@@ -129,27 +134,29 @@ void XCrawler::fetch()
                 pState->iLen = sUrl.size();
                 pState->iLast = 0;
 
-                //struct epoll_event event;
-                //event.data.ptr = (void *)pState;
-                //event.events = EPOLLIN | EPOLLET;
+#ifdef __linux__
+                struct epoll_event event;
+                event.data.ptr = (void *)pState;
+                event.events = EPOLLIN | EPOLLET;
 
-                //iRet = epoll_ctl(epfd, EPOLL_CTL_ADD, iFd, &event);
-                //check(iRet == 0, "epoll_add");
-
+                iRet = epoll_ctl(epfd, EPOLL_CTL_ADD, iFd, &event);
+                check(iRet == 0, "epoll_add");
+#elif __APPLE__
                 struct kevent event;
                 event.udata = (void *)pState;
                 chlist.push_back(event);
                 EV_SET(&(chlist[m]), iFd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
                 chlist[m].udata = (void *)pState;
                 m++;
-
+#endif
                 curConns++;
             }
         } while(0);
         
-        //n = epoll_wait(epfd, events, MAXEVENTS, EPOLLTIMEOUT);
-        //check(n >= 0, "epoll_wait");
-
+#ifdef __linux__
+        n = epoll_wait(epfd, events, MAXEVENTS, EPOLLTIMEOUT);
+        check(n >= 0, "epoll_wait");
+#elif __APPLE__
         n = kevent(epfd, &chlist[0], chlist.size(), events, MAXEVENTS, NULL);
 
         m = 0;
@@ -160,6 +167,7 @@ void XCrawler::fetch()
             log_err("Exceed maximum events");
             break;
         }
+#endif
 
         for (int i = 0; i < n; i++) {
             CrawlerState *pState = (CrawlerState *)events[i].udata;
@@ -254,18 +262,20 @@ void XCrawler::fetch()
 
                             log_info("make connection suc!");
 
-                            //struct epoll_event event;
-                            //event.data.ptr = (void *)pState;
-                            //event.events = EPOLLIN | EPOLLET;
+#ifdef __linux__
+                            struct epoll_event event;
+                            event.data.ptr = (void *)pState;
+                            event.events = EPOLLIN | EPOLLET;
 
-                            //iRet = epoll_ctl(epfd, EPOLL_CTL_ADD, pState->iFd, &event);
-                            //check(iRet == 0, "epoll_add");
-
+                            iRet = epoll_ctl(epfd, EPOLL_CTL_ADD, pState->iFd, &event);
+                            check(iRet == 0, "epoll_add");
+#elif __APPLE__
                             struct kevent event;
                             chlist.push_back(event);
                             EV_SET(&(chlist[m]), iFd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
                             chlist[m].udata = (void *)pState;
                             m++;
+#endif
 
                             curConns++;
                         } else {
@@ -349,18 +359,20 @@ void XCrawler::fetch()
 
                             log_info("make connection suc!");
 
-                            //struct epoll_event event;
-                            //event.data.ptr = (void *)pState;
-                            //event.events = EPOLLIN | EPOLLET;
+#ifdef __linux__
+                            struct epoll_event event;
+                            event.data.ptr = (void *)pState;
+                            event.events = EPOLLIN | EPOLLET;
 
-                            //iRet = epoll_ctl(epfd, EPOLL_CTL_ADD, pState->iFd, &event);
-                            //check(iRet == 0, "epoll_add");
-
+                            iRet = epoll_ctl(epfd, EPOLL_CTL_ADD, pState->iFd, &event);
+                            check(iRet == 0, "epoll_add");
+#elif __APPLE__
                             struct kevent event;
                             chlist.push_back(event);
                             EV_SET(&(chlist[m]), iFd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
                             chlist[m].udata = (void *)pState;
                             m++;
+#endif
 
                             curConns++;
                         } else {

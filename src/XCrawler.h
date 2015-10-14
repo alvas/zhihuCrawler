@@ -19,15 +19,19 @@
 #include <signal.h>
 #include <sstream>
 #include <string>
-//#include <sys/epoll.h>
-#include <sys/event.h> /* for kqueue */
 #include <sys/socket.h> /* socket, connect */
 #include <sys/time.h>
-#include <sys/time.h> /* for kqueue */
-#include <sys/types.h> /* for kqueue */
 #include <time.h>
 #include <unistd.h>
 #include <vector>
+
+#ifdef __linux__
+#include <sys/epoll.h>
+#elif __APPLE__
+#include <sys/event.h> /* for kqueue */
+#include <sys/time.h> /* for kqueue */
+#include <sys/types.h> /* for kqueue */
+#endif
 
 #define MAXEVENTS   1024
 #define MAXCONNS    500
@@ -52,12 +56,18 @@ public:
     ~XCrawler();
 
     void start();
+
+    // This method is called in a thread start_routine.
     void fetch();
 
 private:
     int epfd;
-    //struct epoll_event *events;
+
+#ifdef __linux__
+    struct epoll_event *events;
+#elif __APPLE__
     struct kevent *events;
+#endif
     int curConns;
 
     struct CrawlerState {
@@ -85,6 +95,7 @@ private:
 private:
     void init();
     void init_epoll();
+
 
     //int fetch_url_and_make_connection(int *pFd, string &sUrl);
     int fetch_url(string &sUrl);
